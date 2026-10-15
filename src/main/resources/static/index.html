@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EchoMind · v1.0 流式对话</title>
+    <!-- 代码高亮主题（本地文件，不依赖 CDN） -->
+    <link rel="stylesheet" href="vendor/highlight-github.min.css">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app">
+
+    <header class="topbar">
+        <div class="brand">
+            <span class="logo">◉</span>
+            <div class="brand-text">
+                <h1>EchoMind</h1>
+                <p>v1.0 · LangChain4j 流式对话 + Redis 多轮记忆</p>
+            </div>
+        </div>
+        <div class="actions">
+            <span class="chip" id="sessionChip" title="当前会话 ID">新会话</span>
+            <button class="ghost-btn" id="newChatBtn" type="button">新对话</button>
+        </div>
+    </header>
+
+    <main class="messages" id="messageList">
+        <div class="empty" id="emptyState">
+            <div class="empty-icon">◉</div>
+            <h2>开始一次对话</h2>
+            <p>回答通过 SSE 流式返回，这里会实时渲染 Markdown。</p>
+            <div class="samples">
+                <button class="sample" type="button">用 Java 写一个快速排序，并解释时间复杂度</button>
+                <button class="sample" type="button">用表格对比 SSE 和 WebSocket 的区别</button>
+                <button class="sample" type="button">你还记得我上一句话说了什么吗？</button>
+            </div>
+        </div>
+    </main>
+
+    <footer class="composer">
+        <textarea id="input" rows="1" placeholder="输入问题，Enter 发送，Shift + Enter 换行"></textarea>
+        <button class="send-btn" id="sendBtn" type="button">发送</button>
+    </footer>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="vendor/marked.umd.js"></script>
+<script src="vendor/purify.min.js"></script>
+<script src="vendor/highlight.min.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
