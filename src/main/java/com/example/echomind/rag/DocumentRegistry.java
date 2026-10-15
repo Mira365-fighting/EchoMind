@@ -90,8 +90,19 @@ public class DocumentRegistry {
      * </ul>
      * 两种情况都会让 {@code /api/rag/status} 谎报，而"状态接口说谎"比"没有状态接口"更糟。
      *
-     * <p>所以以 Milvus 为准：数量对不上就丢弃登记簿（只是列表不准，不动 Milvus 里的数据），
-     * 并提示重新上传。取不到统计时保守处理 —— 不动登记簿，避免误删。
+     * <p><b>判断标准是「Milvus 里到底有没有数据」，而不是「条数是否精确相等」</b>。
+     * 这一点是踩过坑之后改的：最初写成"数量不一致就丢弃登记簿"，结果误伤。
+     * 因为 Milvus 的 {@code row_count} 统计的是<b>包含已删除行</b>的总数 ——
+     * 重新上传同名文档时，旧向量只是被按文件名过滤删除标成了墓碑，
+     * 要等后台 compaction 才会真正消失。所以「登记簿 8 片 / Milvus 16 行」这种情况完全正常，
+     * 数据好好的，却被当成异常把登记簿清掉了。
+     *
+     * <p>现在的口径：
+     * <ul>
+     *     <li>Milvus <b>空了</b>但登记簿有记录 → 这才是要修的 bug（向量确实丢了），丢弃登记簿并提示重传；</li>
+     *     <li>Milvus <b>有数据</b>但条数对不上 → 保留登记簿，只打一条 WARN 说明差异与可能原因；</li>
+     *     <li>取不到统计 → 保守处理，不动登记簿，避免误删。</li>
+     * </ul>
      */
     private void reconcileWithMilvus() {
         Long rowCount = milvusRowCount();
@@ -99,6 +110,7 @@ public class DocumentRegistry {
             return;
         }
         int tracked = totalChunks();
+
         if (rowCount == tracked) {
             if (tracked > 0) {
                 log.info("RAG | 登记簿与 Milvus 核对一致：{} 篇 / {} 个切片",
@@ -106,15 +118,28 @@ public class DocumentRegistry {
             }
             return;
         }
+
+        if (rowCount == 0 && tracked > 0) {
+            log.warn("""
+                    RAG | 登记簿里有 {} 篇 / {} 个切片，但 Milvus 集合「{}」是空的 —— 已丢弃登记簿。
+                          常见原因：上次运行时 Milvus 没起来（降级成了内存向量库，文档没进 Milvus），
+                          或者 Milvus 里的集合被重建 / 清空过。
+                          影响：知识库列表已清空，需要重新上传文档。""",
+                    documents.size(), tracked, vectorStoreProvider.collection());
+            documents.clear();
+            flush();
+            return;
+        }
+
+        // 条数不等但 Milvus 里有数据 —— 不动登记簿。
+        // 最典型的成因是"重新上传同名文档"：旧向量被标成墓碑还没被 compaction 清掉，
+        // 于是 row_count 比实际有效切片多。检索不看 row_count，结果不受影响。
         log.warn("""
-                RAG | 登记簿与 Milvus 对不上，已丢弃登记簿（以 Milvus 为准）。
-                      登记簿记录 {} 篇 / {} 个切片；Milvus 集合「{}」实际只有 {} 条向量。
-                      常见原因：上次运行时 Milvus 没起来（降级成了内存向量库，文档没进 Milvus），
-                      或者 Milvus 里的集合被重建 / 清空过。
-                      影响：知识库列表已清空，但 Milvus 里的数据没动 —— 请重新上传文档。""",
-                documents.size(), tracked, vectorStoreProvider.collection(), rowCount);
-        documents.clear();
-        flush();
+                RAG | 登记簿切片数（{}）与 Milvus 行数（{}）不完全一致，但 Milvus 里有数据，保留登记簿。
+                      最常见原因：重新上传过同名文档 —— 旧向量被标记删除（墓碑）尚未被后台 compaction 清理，
+                      所以 row_count 会偏大。检索不走 row_count，结果不受影响。
+                      如果检索结果里出现内容重复的片段，说明确实存在多份拷贝，重传该文档即可。""",
+                tracked, rowCount);
     }
 
     /**

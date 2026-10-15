@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>EchoMind · v2.0 RAG 检索增强</title>
+    <title>EchoMind · v3.0 AI Agent 与跨语言协同</title>
     <!-- 代码高亮主题（本地文件，不依赖 CDN） -->
     <link rel="stylesheet" href="vendor/highlight-github.min.css">
     <link rel="stylesheet" href="css/style.css">
@@ -11,10 +11,10 @@
 <body>
 <div class="app">
 
-    <!-- ==================== 左侧：知识库 ==================== -->
+    <!-- ==================== 左侧：控制面板 ==================== -->
     <aside class="sidebar" id="sidebar">
         <div class="side-head">
-            <h2>知识库</h2>
+            <h2>控制面板</h2>
             <button class="icon-btn" id="sideToggle" type="button" title="收起 / 展开">«</button>
         </div>
 
@@ -24,11 +24,33 @@
             <label class="switch-row" for="ragToggle">
                 <span class="switch-text">
                     <strong>启用检索增强</strong>
-                    <em>关闭后就是 v1.0 的纯对话</em>
+                    <em>关闭后不再预先检索文档</em>
                 </span>
                 <input type="checkbox" id="ragToggle" checked>
                 <span class="switch-track"><i></i></span>
             </label>
+
+            <!-- Agent 开关 -->
+            <label class="switch-row" for="agentToggle">
+                <span class="switch-text">
+                    <strong>启用 Agent 推理</strong>
+                    <em>模型自主决定调哪个工具</em>
+                </span>
+                <input type="checkbox" id="agentToggle" checked>
+                <span class="switch-track"><i></i></span>
+            </label>
+
+            <!-- Agent 状态 -->
+            <div class="panel">
+                <div class="panel-title">
+                    Agent 状态
+                    <span class="hint" id="agentHint">读取中…</span>
+                </div>
+                <div class="kv" id="agentStatus">
+                    <div class="kv-row"><span>状态</span><b class="dim">读取中…</b></div>
+                </div>
+                <div class="tool-list" id="toolList"></div>
+            </div>
 
             <!-- 向量库状态 -->
             <div class="panel">
@@ -36,6 +58,20 @@
                 <div class="kv" id="ragStatus">
                     <div class="kv-row"><span>状态</span><b class="dim">读取中…</b></div>
                 </div>
+            </div>
+
+            <!-- Agent 最近运行 -->
+            <div class="panel">
+                <div class="panel-title">
+                    最近 Agent 运行
+                    <button class="link-btn" id="refreshTraceBtn" type="button">刷新</button>
+                </div>
+                <div class="trace-list" id="traceList">
+                    <div class="doc-empty">还没有运行记录</div>
+                </div>
+                <p class="foot-note" id="traceNote">
+                    中间过程写在 Redis 里，<b>重启应用后仍能读回</b> —— 这是它真的被持久化的证据。
+                </p>
             </div>
 
             <!-- 上传 -->
@@ -89,12 +125,12 @@
     <div class="main">
 
         <header class="topbar">
-            <button class="icon-btn only-narrow" id="sideOpen" type="button" title="打开知识库">»</button>
+            <button class="icon-btn only-narrow" id="sideOpen" type="button" title="打开控制面板">»</button>
             <div class="brand">
                 <span class="logo">◉</span>
                 <div class="brand-text">
                     <h1>EchoMind</h1>
-                    <p>v2.0 · RAG 检索增强（BGE 向量化 + Milvus TopK 检索）</p>
+                    <p>v3.0 · AI Agent（ReAct 多步推理 + Function Calling + 跨语言工具）</p>
                 </div>
             </div>
             <div class="actions">
@@ -106,12 +142,15 @@
         <main class="messages" id="messageList">
             <div class="empty" id="emptyState">
                 <div class="empty-icon">◉</div>
-                <h2>先上传文档，再提问</h2>
-                <p>回答会严格基于文档内容，并在下方列出实际检索到的段落，便于核对是否在"照稿说话"。</p>
+                <h2>Agent 会自己决定调哪个工具</h2>
+                <p>
+                    提问后，模型先想清楚要什么信息，再依次调用工具（天气、订单、知识库……），
+                    每一步的思考、入参、返回都会实时显示在回答上方，可以随时核对它"看到了什么才这么答"。
+                </p>
                 <div class="samples">
-                    <button class="sample" type="button">这份文档主要讲了什么？</button>
-                    <button class="sample" type="button">把文档里的关键结论整理成一个表格</button>
-                    <button class="sample" type="button">文档里有没有提到一个不存在的东西？</button>
+                    <button class="sample" type="button">查北京天气并告诉我订单状态</button>
+                    <button class="sample" type="button">我的订单里哪些还没收货？顺便说下北京今天冷不冷</button>
+                    <button class="sample" type="button">入职 4 年有几天年假？</button>
                 </div>
             </div>
         </main>

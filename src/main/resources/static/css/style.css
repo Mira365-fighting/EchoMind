@@ -1222,7 +1222,8 @@ body {
     }
 
     .bubble,
-    .ctx {
+    .ctx,
+    .agent {
         max-width: 92%;
         width: auto;
     }
@@ -1230,4 +1231,315 @@ body {
     .chip {
         display: none;
     }
+}
+
+/* ==========================================================================
+   v3.0 新增：Agent 思考过程时间线 + 工具清单 + 运行记录
+   ========================================================================== */
+
+/* ---------- 回答上方的 Agent 过程时间线 ---------- */
+.agent {
+    width: 82%;
+    max-width: 82%;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: #fbfcfe;
+    font-size: 12.5px;
+}
+
+.agent-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.agent-head::-webkit-details-marker {
+    display: none;
+}
+
+/* 折叠箭头：展开朝下，收起朝右 */
+.agent-head::before {
+    content: '▾';
+    color: var(--text-mute);
+    font-size: 10px;
+    transition: transform .15s;
+}
+
+.agent:not([open]) .agent-head::before {
+    transform: rotate(-90deg);
+}
+
+.agent-badge {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: .3px;
+}
+
+.agent-meta {
+    color: var(--text-mute);
+    font-size: 11.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---------- 步骤列表：左侧一条竖线串起所有圆点 ---------- */
+.agent-steps {
+    margin: 0;
+    padding: 4px 12px 10px;
+    list-style: none;
+    border-top: 1px solid var(--border);
+}
+
+.step {
+    position: relative;
+    display: flex;
+    gap: 9px;
+    padding: 7px 0;
+}
+
+/* 竖线画在圆点中心那一列上 */
+.step::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--border-strong);
+}
+
+/* 第一个圆点上方、最后一个圆点下方不要线，视觉上才是"起点到终点" */
+.step:first-child::before {
+    top: 14px;
+}
+
+.step:last-child::before {
+    bottom: auto;
+    height: 14px;
+}
+
+.step-dot {
+    position: relative;
+    z-index: 1;
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    margin-top: 6px;
+    border-radius: 50%;
+    background: var(--text-mute);
+    /* 用背景色描边，把竖线在圆点处"切断"，看起来才像节点 */
+    box-shadow: 0 0 0 3px #fbfcfe;
+}
+
+.step-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.step-title {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-weight: 600;
+    color: var(--text-soft);
+}
+
+.step-title em {
+    font-style: normal;
+    font-weight: 400;
+    font-size: 11px;
+    color: var(--text-mute);
+}
+
+.step-text {
+    margin-top: 2px;
+    color: var(--text-soft);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.step-args {
+    display: block;
+    margin-top: 3px;
+    padding: 4px 7px;
+    border-radius: var(--radius-sm);
+    background: #eef1f7;
+    color: var(--text);
+    font-family: ui-monospace, "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
+}
+
+.step-fold {
+    margin-top: 3px;
+}
+
+.step-fold > summary {
+    cursor: pointer;
+    color: var(--text-mute);
+    font-size: 11.5px;
+    list-style: none;
+}
+
+.step-fold > summary::-webkit-details-marker {
+    display: none;
+}
+
+.step-fold > summary::before {
+    content: '▸ ';
+}
+
+.step-fold[open] > summary::before {
+    content: '▾ ';
+}
+
+.step-pre {
+    margin: 4px 0 0;
+    padding: 6px 8px;
+    max-height: 220px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: #f2f5fa;
+    font-family: ui-monospace, "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* 按步骤类型上色：思考=灰、调工具=蓝、返回=绿、失败/出错=红 */
+.step.tool_call .step-dot {
+    background: var(--accent);
+}
+
+.step.tool_result .step-dot {
+    background: var(--ok);
+}
+
+.step.answer .step-dot {
+    background: var(--accent-deep);
+}
+
+.step.tool_result.failed .step-dot,
+.step.error .step-dot {
+    background: var(--danger);
+}
+
+.step.tool_call .step-title {
+    color: var(--accent-deep);
+}
+
+.step.tool_result.failed .step-title,
+.step.error .step-title,
+.step.error .step-text {
+    color: var(--danger);
+}
+
+/* ---------- 侧栏：工具清单 ---------- */
+.tool-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 9px;
+}
+
+.tool-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: #f7f9fc;
+}
+
+.tool-glyph {
+    flex: 0 0 auto;
+    font-size: 12px;
+}
+
+.tool-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.tool-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.tool-desc {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-mute);
+}
+
+/* 工具的真实函数名（发给模型的那个标识），用等宽字体和中文短名区分开 */
+.tool-code {
+    font-family: ui-monospace, "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 10.5px;
+    font-weight: 400;
+    color: var(--text-mute);
+}
+
+/* 执行位置标签：蓝色=Java 本地，橙色=走 HTTP 调 Python */
+.tool-src {
+    display: inline-block;
+    margin-top: 2px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    font-size: 10.5px;
+}
+
+.tool-src.python {
+    background: var(--warn-soft);
+    color: var(--warn);
+}
+
+/* ---------- 侧栏：最近运行记录 ---------- */
+.trace-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.trace-item {
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: #f7f9fc;
+}
+
+.trace-q {
+    font-size: 12px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.trace-meta {
+    margin-top: 1px;
+    font-size: 10.5px;
+    color: var(--text-mute);
+}
+
+.foot-note {
+    margin: 8px 0 0;
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--text-mute);
 }

@@ -1,18 +1,27 @@
 /**
- * EchoMind v2.0 前端逻辑
+ * EchoMind v3.0 前端逻辑
  *
- * 两条链路：
+ * 三条链路：
  *   1) 对话：EventSource 连 /api/chat/stream
- *         session 事件 → 拿到会话 id
- *         context 事件 → 本次检索命中的 TopK 片段（v2.0 新增），立刻渲染成「检索到的上下文」面板
- *         message 事件 → 增量 token，累加后节流整体重渲染 Markdown
- *         done   事件 → 收尾
- *   2) 知识库：/api/documents（增删查）、/api/rag/status（状态）、/api/rag/search（只检索不自测）
+ *         session     事件 → 拿到会话 id
+ *         context     事件 → 本次预检索命中的 TopK 片段（v2.0），渲染成「检索到的上下文」面板
+ *         agent_start 事件 → v3.0：Agent 开始推理，建一条时间线，附 traceId 与可用工具
+ *         agent_step  事件 → v3.0：中间某一步（思考 / 调工具 / 工具返回 / 出错），追加到时间线
+ *         message     事件 → 增量 token，累加后节流整体重渲染 Markdown
+ *         agent_done  事件 → v3.0：收尾统计（轮数 / 工具次数 / 耗时），刷新侧栏运行记录
+ *         done        事件 → 收尾
+ *   2) 知识库：/api/documents（增删查）、/api/rag/status（状态）、/api/rag/search（只检索自测）
+ *   3) Agent ：/api/agent/status（配置 + 工具清单 + Python 服务健康）、
+ *              /api/agent/traces/{memoryId}（最近的运行记录，存在 Redis 里）
  *
  * 为什么要「整体重渲染」而不是「往 DOM 里追加 token」？
  *   Markdown 是上下文相关的（比如 ``` 围栏、列表缩进、表格），
  *   只有把当前已收到的全文重新解析一遍，才能保证渲染结果始终正确。
  *   代价是每渲染一次都要重新解析一遍全文，所以用 50ms 节流控制频率。
+ *
+ * 安全约定：凡是来自后端的文本（模型输出、文档片段、工具入参出参）
+ * 一律用 textContent 写入 DOM，绝不拼 innerHTML —— 只有 Markdown 渲染结果走 innerHTML，
+ * 而且必须过 DOMPurify。
  */
 (function () {
     'use strict';
@@ -23,8 +32,11 @@
     const API_BASE = location.protocol === 'file:' ? 'http://localhost:8080' : '';
     const STORAGE_KEY = 'echomind.memoryId';
     const RAG_KEY = 'echomind.ragEnabled';
+    const AGENT_KEY = 'echomind.agentEnabled';
     // Markdown 重渲染节流间隔：太小会白烧 CPU，太大打字机就不顺
     const RENDER_INTERVAL_MS = 50;
+    // 工具返回内容短于这个长度就直接展开，长了才折叠（省得每次都要点一下）
+    const STEP_FOLD_THRESHOLD = 220;
 
     /* ==================== DOM ==================== */
 
@@ -52,15 +64,24 @@
         searchResult: document.getElementById('searchResult'),
         sideToggle: document.getElementById('sideToggle'),
         sideOpen: document.getElementById('sideOpen'),
+
+        agentToggle: document.getElementById('agentToggle'),
+        agentStatus: document.getElementById('agentStatus'),
+        agentHint: document.getElementById('agentHint'),
+        toolList: document.getElementById('toolList'),
+        traceList: document.getElementById('traceList'),
+        refreshTraceBtn: document.getElementById('refreshTraceBtn'),
     };
 
     /* ==================== 状态 ==================== */
 
     let memoryId = localStorage.getItem(STORAGE_KEY) || '';
     let ragEnabled = localStorage.getItem(RAG_KEY) !== 'false';
-    let session = null;   // 当前流式会话：{ es, bubble, settled, ctxEl }
+    let agentEnabled = localStorage.getItem(AGENT_KEY) !== 'false';
+    let session = null;   // 当前流式会话：{ es, bubble, settled, ctxEl, agent, traceId }
     let renderTimer = null;
     let ragStatusCache = null;
+    let agentStatusCache = null;
 
     /* ==================== Markdown 渲染 ==================== */
 
@@ -256,6 +277,113 @@
         return box;
     }
 
+    /* ==================== v3.0 Agent 过程时间线 ==================== */
+
+    /**
+     * 建一条 Agent 时间线（可折叠），插在回答气泡上方。
+     *
+     * 为什么放在气泡<b>上面</b>：时间线记录的是"答案是怎么来的"，
+     * 阅读顺序上应该先看过程再看结论。
+     */
+    function createAgentTimeline(info) {
+        const root = document.createElement('details');
+        root.className = 'agent';
+        root.open = true;   // 默认展开：过程本来就是这一版要展示的重点
+
+        const head = document.createElement('summary');
+        head.className = 'agent-head';
+
+        const badge = document.createElement('span');
+        badge.className = 'agent-badge';
+        badge.textContent = 'Agent';
+
+        const meta = document.createElement('span');
+        meta.className = 'agent-meta';
+        meta.textContent = '正在推理…';
+
+        head.appendChild(badge);
+        head.appendChild(meta);
+        root.appendChild(head);
+
+        const steps = document.createElement('ol');
+        steps.className = 'agent-steps';
+        root.appendChild(steps);
+
+        return { root, meta, steps, count: 0, info: info || {} };
+    }
+
+    /** 把一个步骤追加到时间线 */
+    function appendAgentStep(timeline, step) {
+        if (!timeline || !step) return;
+        timeline.count += 1;
+
+        const li = document.createElement('li');
+        li.className = 'step ' + (step.type || 'thought') + (step.failed ? ' failed' : '');
+
+        const dot = document.createElement('span');
+        dot.className = 'step-dot';
+
+        const body = document.createElement('div');
+        body.className = 'step-body';
+
+        const title = document.createElement('div');
+        title.className = 'step-title';
+        title.appendChild(document.createTextNode(step.title || step.type || '步骤'));
+        if (step.costMs > 0) {
+            const cost = document.createElement('em');
+            cost.textContent = (step.costMs / 1000).toFixed(2) + 's';
+            title.appendChild(cost);
+        }
+        body.appendChild(title);
+
+        if (step.type === 'tool_call') {
+            // 工具入参：模型决定传什么，是排查"它为什么查错了"的第一手材料
+            const args = document.createElement('code');
+            args.className = 'step-args';
+            args.textContent = step.toolName + ' ' + (step.toolArguments || '{}');
+            body.appendChild(args);
+        } else if (step.type === 'tool_result') {
+            const fold = document.createElement('details');
+            fold.className = 'step-fold';
+            const content = step.content || '(空)';
+            fold.open = content.length <= STEP_FOLD_THRESHOLD;
+
+            const summary = document.createElement('summary');
+            summary.textContent = step.failed ? '查看失败信息' : '查看工具返回内容';
+
+            const pre = document.createElement('pre');
+            pre.className = 'step-pre';
+            pre.textContent = content;
+
+            fold.appendChild(summary);
+            fold.appendChild(pre);
+            body.appendChild(fold);
+        } else if (step.content) {
+            const text = document.createElement('div');
+            text.className = 'step-text';
+            text.textContent = step.content;
+            body.appendChild(text);
+        }
+
+        li.appendChild(dot);
+        li.appendChild(body);
+        timeline.steps.appendChild(li);
+
+        if (isNearBottom()) scrollToBottom();
+    }
+
+    /** traceId 太长，界面上只显示前 8 位 */
+    function shortId(id) {
+        return id ? String(id).slice(0, 8) : '--------';
+    }
+
+    function finishLabel(reason) {
+        if (reason === 'answered') return '正常作答';
+        if (reason === 'max_steps') return '达到上限，强制收尾';
+        if (reason === 'error') return '执行出错';
+        return reason || '-';
+    }
+
     /* ==================== 滚动 ==================== */
 
     function isNearBottom() {
@@ -279,13 +407,14 @@
 
         const bubble = appendAssistantBubble();
 
-        session = { es: null, bubble, settled: false, ctxEl: null };
+        session = { es: null, bubble, settled: false, ctxEl: null, agent: null, traceId: null };
         setStreaming(true);
         paint(bubble, true);
 
         const url = `${API_BASE}/api/chat/stream?message=${encodeURIComponent(content)}`
             + (memoryId ? `&memoryId=${encodeURIComponent(memoryId)}` : '')
-            + `&rag=${ragEnabled ? 'true' : 'false'}`;
+            + `&rag=${ragEnabled ? 'true' : 'false'}`
+            + `&agent=${agentEnabled ? 'true' : 'false'}`;
 
         const es = new EventSource(url);
         session.es = es;
@@ -324,6 +453,39 @@
                 session.bubble.raw += e.data;
             }
             schedulePaint();
+        });
+
+        // v3.0：Agent 开始推理 —— 建时间线，插在回答气泡上方
+        es.addEventListener('agent_start', (e) => {
+            const info = parseData(e.data) || {};
+            session.agent = createAgentTimeline(info);
+            session.traceId = info.traceId || null;
+            session.bubble.item.insertBefore(session.agent.root, session.bubble.el);
+            session.agent.meta.textContent = '#' + shortId(info.traceId)
+                + ' · 最多 ' + info.maxSteps + ' 轮 · 可用工具 ' + info.toolCount + ' 个'
+                + ' · 正在推理…';
+            if (isNearBottom()) scrollToBottom();
+        });
+
+        // v3.0：Agent 中间某一步
+        es.addEventListener('agent_step', (e) => {
+            if (!session || !session.agent) return;
+            appendAgentStep(session.agent, parseData(e.data) || {});
+        });
+
+        // v3.0：Agent 收尾，把统计信息补到时间线头部，并刷新侧栏的"最近运行"
+        es.addEventListener('agent_done', (e) => {
+            const info = parseData(e.data) || {};
+            session.traceId = info.traceId || session.traceId;
+            if (session && session.agent) {
+                session.agent.meta.textContent = '#' + shortId(info.traceId)
+                    + ' · ' + info.stepCount + ' 轮 · ' + info.toolCallCount + ' 次工具 · '
+                    + (Number(info.costMs || 0) / 1000).toFixed(1) + 's · '
+                    + finishLabel(info.finishReason)
+                    + (info.truncated ? ' · 已截断' : '');
+            }
+            // trace 已经写进 Redis 了，顺手刷新侧栏列表 —— 这本身就是持久化的验证
+            refreshTraces();
         });
 
         // 收尾
@@ -654,6 +816,159 @@
         }
     }
 
+    /* ==================== v3.0 Agent 面板 ==================== */
+
+    async function refreshAgentStatus() {
+        try {
+            const s = await api('/api/agent/status');
+            agentStatusCache = s;
+            renderAgentStatus(s);
+            renderToolList(s.tools || []);
+        } catch (e) {
+            // 后端没起时不要留一片空白，明确写出来
+            el.agentStatus.innerHTML = '';
+            el.agentStatus.appendChild(kvRow('状态', '后端未连接', 'off'));
+            el.agentHint.textContent = '';
+            el.toolList.innerHTML = '';
+        }
+    }
+
+    function renderAgentStatus(s) {
+        el.agentStatus.innerHTML = '';
+        el.agentHint.textContent = s.enabled ? '运行中' : '已关闭';
+
+        el.agentStatus.appendChild(kvRow('状态', s.enabled ? '启用' : '已关闭', s.enabled ? 'ok' : 'off'));
+        el.agentStatus.appendChild(kvRow('最大轮数 / 工具次数', s.maxSteps + ' / ' + s.maxToolCalls, ''));
+        el.agentStatus.appendChild(kvRow('决策温度', Number(s.temperature).toFixed(2), ''));
+        el.agentStatus.appendChild(kvRow('已注册工具', s.toolCount + ' 个', ''));
+        // 过程记录落点：Redis 正常时是 "Redis"，Redis 挂了会变成 "进程内存（降级）"
+        el.agentStatus.appendChild(kvRow('过程记录', s.traceStore || '-',
+            (s.traceStore || '').indexOf('内存') >= 0 ? 'warn' : ''));
+
+        // 跨语言链路：Python 工具服务通不通
+        const py = s.python || {};
+        const pyOff = py.enabled === false;
+        el.agentStatus.appendChild(kvRow('Python 服务',
+            pyOff ? '未启用' : (py.reachable ? '已连通' : '连不上'),
+            pyOff ? 'off' : (py.reachable ? 'ok' : 'warn')));
+
+        if (!pyOff && !py.reachable) {
+            const tip = document.createElement('p');
+            tip.className = 'warn-text';
+            tip.textContent = '订单类工具会失败（天气等 Java 本地工具不受影响）：'
+                + (py.detail || '');
+            el.agentStatus.appendChild(tip);
+        }
+        if ((s.traceStore || '').indexOf('内存') >= 0) {
+            const tip = document.createElement('p');
+            tip.className = 'warn-text';
+            tip.textContent = 'Agent 过程记录已降级为进程内存：Redis 不可达，重启后读不到历史运行。';
+            el.agentStatus.appendChild(tip);
+        }
+    }
+
+    function renderToolList(tools) {
+        el.toolList.innerHTML = '';
+        if (!tools.length) return;
+
+        tools.forEach((t) => {
+            const isPython = (t.source || '').indexOf('Python') >= 0;
+
+            const item = document.createElement('div');
+            item.className = 'tool-item';
+            item.title = (t.group || '') + ' · ' + (t.description || '');
+
+            const glyph = document.createElement('span');
+            glyph.className = 'tool-glyph';
+            glyph.textContent = isPython ? '🐍' : '⚙';
+
+            const body = document.createElement('div');
+            body.className = 'tool-body';
+
+            const name = document.createElement('div');
+            name.className = 'tool-name';
+            name.textContent = t.label + ' ';
+            const code = document.createElement('span');
+            code.className = 'tool-code';
+            code.textContent = t.name;
+            name.appendChild(code);
+
+            const desc = document.createElement('div');
+            desc.className = 'tool-desc';
+            desc.textContent = firstSentence(t.description);
+
+            const src = document.createElement('span');
+            src.className = 'tool-src' + (isPython ? ' python' : '');
+            src.textContent = t.source || 'Java 本地';
+
+            body.appendChild(name);
+            body.appendChild(desc);
+            body.appendChild(src);
+            item.appendChild(glyph);
+            item.appendChild(body);
+            el.toolList.appendChild(item);
+        });
+    }
+
+    /** 工具说明往往是一段长文，列表里只取第一句 */
+    function firstSentence(text) {
+        if (!text) return '';
+        const one = String(text).replace(/\s+/g, ' ').trim();
+        const cut = one.split(/[。；]/)[0] || one;
+        return cut.length > 58 ? cut.slice(0, 58) + '…' : cut;
+    }
+
+    /**
+     * 拉取本会话最近的 Agent 运行记录。
+     *
+     * 这些记录存在 Redis 里（不是浏览器内存），所以<b>刷新页面甚至重启后端之后仍然在</b> ——
+     * 这一点是 v3.0「Redis 完善多轮状态管理」最直接的验证方式。
+     */
+    async function refreshTraces() {
+        if (!memoryId) {
+            renderTraces([]);
+            return;
+        }
+        try {
+            const list = await api('/api/agent/traces/' + encodeURIComponent(memoryId) + '?limit=5');
+            renderTraces(Array.isArray(list) ? list : []);
+        } catch (e) {
+            renderTraces([]);
+        }
+    }
+
+    function renderTraces(list) {
+        el.traceList.innerHTML = '';
+        if (!list.length) {
+            const empty = document.createElement('div');
+            empty.className = 'doc-empty';
+            empty.textContent = memoryId ? '这个会话还没有运行记录' : '先发一条消息试试';
+            el.traceList.appendChild(empty);
+            return;
+        }
+
+        list.forEach((t) => {
+            const item = document.createElement('div');
+            item.className = 'trace-item';
+            item.title = 'traceId：' + t.traceId + '\n问题：' + (t.question || '');
+
+            const question = document.createElement('div');
+            question.className = 'trace-q';
+            question.textContent = t.question || '(无)';
+
+            const meta = document.createElement('div');
+            meta.className = 'trace-meta';
+            meta.textContent = '#' + shortId(t.traceId) + ' · ' + t.stepCount + ' 轮 · '
+                + t.toolCallCount + ' 次工具 · '
+                + (Number(t.costMs || 0) / 1000).toFixed(1) + 's · '
+                + finishLabel(t.finishReason);
+
+            item.appendChild(question);
+            item.appendChild(meta);
+            el.traceList.appendChild(item);
+        });
+    }
+
     /* ==================== 页面状态 ==================== */
 
     function setStreaming(active) {
@@ -701,10 +1016,14 @@
         if (el.empty) el.empty.style.display = '';
 
         if (old) {
-            // 顺手把服务端记忆也清掉，别在 Redis 里留垃圾
+            // 顺手把服务端的两份状态也清掉，别在 Redis 里留垃圾：
+            // 一份是会话记忆（多轮上下文），一份是 Agent 运行记录（中间过程）
             fetch(`${API_BASE}/api/chat/memory/${encodeURIComponent(old)}`, { method: 'DELETE' })
                 .catch(() => { /* 后端没起也无所谓 */ });
+            fetch(`${API_BASE}/api/agent/traces/${encodeURIComponent(old)}`, { method: 'DELETE' })
+                .catch(() => { /* 同上 */ });
         }
+        renderTraces([]);
         el.input.focus();
     }
 
@@ -798,6 +1117,20 @@
         refreshStatus();
     });
 
+    el.agentToggle.checked = agentEnabled;
+    el.agentToggle.addEventListener('change', () => {
+        agentEnabled = el.agentToggle.checked;
+        localStorage.setItem(AGENT_KEY, String(agentEnabled));
+        toast(agentEnabled
+            ? '已启用 Agent：模型会自己决定调哪个工具'
+            : '已关闭 Agent：退化为 v2.0 的单轮回答');
+        refreshAgentStatus();
+    });
+
+    el.refreshTraceBtn.addEventListener('click', () => {
+        refreshTraces().then(() => toast('已刷新运行记录'));
+    });
+
     el.clearAllBtn.addEventListener('click', clearAll);
     el.searchBtn.addEventListener('click', runSearch);
     el.searchInput.addEventListener('keydown', (e) => {
@@ -822,5 +1155,7 @@
     loadHistory();
     refreshStatus();
     refreshDocuments();
+    refreshAgentStatus();
+    refreshTraces();
     el.input.focus();
 })();
