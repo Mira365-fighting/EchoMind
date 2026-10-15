@@ -6,7 +6,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.1</version>
+        <version>4.0.8</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.example</groupId>
@@ -66,11 +66,31 @@
             <artifactId>langchain4j-open-ai-spring-boot4-starter</artifactId>
             <version>${langchain4j.version}</version>
         </dependency>
-        <!--Milvus-->
+        <!--Milvus 向量库-->
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-milvus</artifactId>
             <version>${langchain4j.version}</version>
+        </dependency>
+        <!--v2.0 文档解析：PDF-->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-document-parser-apache-pdfbox</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+        <!--v2.0 文档解析：Markdown-->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-document-parser-markdown</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+        <!--v2.0 本地中文 Embedding：BGE-small-zh-v1.5 量化版
+            模型文件（ONNX + tokenizer）直接打包在 jar 里，完全离线运行，不需要任何 API Key。
+            输出维度 512 —— Milvus collection 的维度必须与之相同。-->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-embeddings-bge-small-zh-v15-q</artifactId>
+            <version>1.19.0-beta29</version>
         </dependency>
         <!--测试类-->
         <dependency>

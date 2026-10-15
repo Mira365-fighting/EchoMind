@@ -1,5 +1,5 @@
 /* ==========================================================================
-   EchoMind v1.0 —— 聊天气泡 + Markdown 排版
+   EchoMind v2.0 —— 左侧知识库 + 右侧聊天气泡 + Markdown 排版
    浅色主题
    ========================================================================== */
 
@@ -17,12 +17,21 @@
     --accent-soft: #eef1fe;
     --accent-deep: #3b57d6;
 
+    --ok: #1f9d63;
+    --ok-soft: #e8f7ef;
+    --warn: #c07d1a;
+    --warn-soft: #fdf4e3;
+    --danger: #e2574c;
+    --danger-soft: #fdeceb;
+
     --radius-lg: 16px;
     --radius-md: 12px;
     --radius-sm: 8px;
 
     --shadow-sm: 0 1px 2px rgba(31, 36, 48, .06);
     --shadow-md: 0 6px 20px rgba(31, 36, 48, .08);
+
+    --sidebar-w: 336px;
 }
 
 * {
@@ -44,20 +53,503 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 
-/* ---------- 整体布局：头 + 消息区 + 输入区，消息区独立滚动 ---------- */
+/* ---------- 整体布局：左知识库 + 右对话 ---------- */
 
 .app {
     display: flex;
-    flex-direction: column;
     height: 100vh;
-    max-width: 920px;
+    max-width: 1320px;
     margin: 0 auto;
     background: rgba(255, 255, 255, .5);
     border-left: 1px solid var(--border);
     border-right: 1px solid var(--border);
 }
 
-/* ---------- 顶栏 ---------- */
+.main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ==========================================================================
+   左侧知识库
+   ========================================================================== */
+
+.sidebar {
+    flex: 0 0 var(--sidebar-w);
+    width: var(--sidebar-w);
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+}
+
+.side-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 15px 16px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.side-head h2 {
+    margin: 0;
+    font-size: 14.5px;
+    font-weight: 600;
+    letter-spacing: .2px;
+}
+
+.side-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.side-foot {
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+    font-size: 11.5px;
+    line-height: 1.6;
+    color: var(--text-soft);
+}
+
+.side-foot .dim {
+    color: var(--text-mute);
+    font-weight: 400;
+}
+
+.icon-btn {
+    width: 26px;
+    height: 26px;
+    flex: 0 0 26px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--text-mute);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    transition: .15s;
+}
+
+.icon-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+}
+
+.only-narrow {
+    display: none;
+}
+
+/* ---------- 面板 ---------- */
+
+.panel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    padding: 11px 12px;
+}
+
+.panel-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 9px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-soft);
+    letter-spacing: .3px;
+}
+
+.panel-title .hint {
+    font-weight: 400;
+    font-size: 11px;
+    color: var(--text-mute);
+}
+
+.collapsible > summary {
+    margin-bottom: 0;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+
+.collapsible > summary::-webkit-details-marker {
+    display: none;
+}
+
+.collapsible > summary::after {
+    content: "▸";
+    color: var(--text-mute);
+    font-size: 11px;
+    transition: .15s;
+}
+
+.collapsible[open] > summary {
+    margin-bottom: 9px;
+}
+
+.collapsible[open] > summary::after {
+    transform: rotate(90deg);
+}
+
+.link-btn {
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--text-mute);
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 400;
+    cursor: pointer;
+}
+
+.link-btn:hover {
+    color: var(--danger);
+}
+
+/* ---------- RAG 开关 ---------- */
+
+.switch-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 11px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    cursor: pointer;
+}
+
+.switch-row input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.switch-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.switch-text strong {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.switch-text em {
+    font-style: normal;
+    font-size: 11px;
+    color: var(--text-mute);
+}
+
+.switch-track {
+    flex: 0 0 40px;
+    width: 40px;
+    height: 23px;
+    border-radius: 999px;
+    background: #cfd6e4;
+    transition: .18s;
+}
+
+.switch-track i {
+    display: block;
+    width: 17px;
+    height: 17px;
+    margin: 3px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: var(--shadow-sm);
+    transition: .18s;
+}
+
+.switch-row input:checked ~ .switch-track {
+    background: var(--accent);
+}
+
+.switch-row input:checked ~ .switch-track i {
+    transform: translateX(17px);
+}
+
+/* ---------- 状态键值对 ---------- */
+
+.kv {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 12px;
+}
+
+.kv-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.kv-row > span {
+    color: var(--text-mute);
+    flex: 0 0 auto;
+}
+
+.kv-row > b {
+    font-weight: 600;
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+
+.kv-row > b.dim {
+    font-weight: 400;
+    color: var(--text-mute);
+}
+
+.badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.6;
+}
+
+.badge.ok {
+    background: var(--ok-soft);
+    color: var(--ok);
+}
+
+.badge.warn {
+    background: var(--warn-soft);
+    color: var(--warn);
+}
+
+.badge.off {
+    background: #eef1f6;
+    color: var(--text-mute);
+}
+
+.warn-text {
+    margin: 6px 0 0;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--warn);
+    background: var(--warn-soft);
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+}
+
+/* ---------- 上传区 ---------- */
+
+.dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 16px 10px;
+    border: 1.5px dashed var(--border-strong);
+    border-radius: var(--radius-md);
+    background: #fafbfe;
+    text-align: center;
+    cursor: pointer;
+    transition: .15s;
+}
+
+.dropzone:hover,
+.dropzone.dragover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+
+.dropzone.busy {
+    pointer-events: none;
+    opacity: .7;
+}
+
+.dz-icon {
+    font-size: 17px;
+    color: var(--accent);
+}
+
+.dz-main {
+    font-size: 12.5px;
+    font-weight: 500;
+}
+
+.dz-sub {
+    font-size: 11px;
+    color: var(--text-mute);
+}
+
+.upload-log {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 9px;
+}
+
+.upload-log:empty {
+    display: none;
+}
+
+.log-item {
+    padding: 6px 9px;
+    border-radius: var(--radius-sm);
+    font-size: 11.5px;
+    line-height: 1.55;
+}
+
+.log-item.ok {
+    background: var(--ok-soft);
+    color: #17694a;
+}
+
+.log-item.err {
+    background: var(--danger-soft);
+    color: #a8342a;
+}
+
+.log-item .muted {
+    color: var(--text-mute);
+}
+
+/* ---------- 文档列表 ---------- */
+
+.doc-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.doc-empty {
+    padding: 10px 2px;
+    font-size: 12px;
+    color: var(--text-mute);
+    text-align: center;
+}
+
+.doc-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: #fafbfe;
+}
+
+.doc-icon {
+    flex: 0 0 auto;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--accent);
+}
+
+.doc-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.doc-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+}
+
+.doc-meta {
+    font-size: 10.5px;
+    color: var(--text-mute);
+    line-height: 1.5;
+}
+
+.doc-del {
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-mute);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    transition: .15s;
+}
+
+.doc-del:hover {
+    background: var(--danger-soft);
+    color: var(--danger);
+}
+
+/* ---------- 检索自测 ---------- */
+
+.search-row {
+    display: flex;
+    gap: 6px;
+}
+
+.search-row input {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+}
+
+.search-row input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.mini-btn {
+    flex: 0 0 auto;
+    padding: 0 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--accent);
+    color: #fff;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: .15s;
+}
+
+.mini-btn:hover {
+    background: var(--accent-deep);
+}
+
+.search-result {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 9px;
+}
+
+.search-result:empty {
+    margin-top: 0;
+}
+
+/* ==========================================================================
+   顶栏
+   ========================================================================== */
 
 .topbar {
     display: flex;
@@ -148,7 +640,9 @@ body {
     background: var(--accent-soft);
 }
 
-/* ---------- 消息区 ---------- */
+/* ==========================================================================
+   消息区
+   ========================================================================== */
 
 .messages {
     flex: 1;
@@ -176,6 +670,13 @@ body {
 
 .msg.user {
     justify-content: flex-end;
+}
+
+/* 助手这一侧改成纵向：气泡在上面，检索到的上下文挂在下面 */
+.msg.assistant {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 7px;
 }
 
 .bubble {
@@ -256,6 +757,112 @@ body {
     50.01%, 100% {
         opacity: 0;
     }
+}
+
+/* ==========================================================================
+   「检索到的上下文」面板（v2.0 的核心可视化）
+   ========================================================================== */
+
+.ctx {
+    width: 82%;
+    max-width: 82%;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: #fbfcfe;
+    font-size: 12.5px;
+}
+
+.ctx > summary {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 11px;
+    cursor: pointer;
+    list-style: none;
+    color: var(--text-soft);
+    user-select: none;
+}
+
+.ctx > summary::-webkit-details-marker {
+    display: none;
+}
+
+.ctx > summary .arrow {
+    color: var(--text-mute);
+    font-size: 10px;
+    transition: .15s;
+}
+
+.ctx[open] > summary .arrow {
+    transform: rotate(90deg);
+}
+
+.ctx-badge {
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.ctx-empty {
+    color: var(--text-mute);
+}
+
+.ctx-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 2px 11px 11px;
+}
+
+.ctx-item {
+    border-left: 2.5px solid var(--border-strong);
+    padding: 1px 0 1px 9px;
+}
+
+.ctx-item.high {
+    border-left-color: var(--ok);
+}
+
+.ctx-item.mid {
+    border-left-color: var(--accent);
+}
+
+.ctx-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--text-soft);
+}
+
+.ctx-src {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.ctx-score {
+    flex: 0 0 auto;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-mute);
+}
+
+.ctx-text {
+    margin-top: 3px;
+    font-size: 12px;
+    line-height: 1.62;
+    color: var(--text-soft);
+    white-space: pre-wrap;
+    max-height: 132px;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
 }
 
 /* ---------- 空状态 ---------- */
@@ -548,6 +1155,7 @@ body {
     opacity: 0;
     pointer-events: none;
     transition: .22s;
+    z-index: 50;
 }
 
 .toast.show {
@@ -557,23 +1165,52 @@ body {
 
 /* ---------- 滚动条 ---------- */
 
-.messages::-webkit-scrollbar {
+.messages::-webkit-scrollbar,
+.side-body::-webkit-scrollbar,
+.doc-list::-webkit-scrollbar,
+.ctx-text::-webkit-scrollbar {
     width: 9px;
 }
 
-.messages::-webkit-scrollbar-thumb {
+.messages::-webkit-scrollbar-thumb,
+.side-body::-webkit-scrollbar-thumb,
+.doc-list::-webkit-scrollbar-thumb,
+.ctx-text::-webkit-scrollbar-thumb {
     background: #d8dee9;
     border: 2px solid transparent;
     border-radius: 999px;
     background-clip: content-box;
 }
 
-.messages::-webkit-scrollbar-thumb:hover {
+.messages::-webkit-scrollbar-thumb:hover,
+.side-body::-webkit-scrollbar-thumb:hover,
+.doc-list::-webkit-scrollbar-thumb:hover {
     background: #c2cad8;
     background-clip: content-box;
 }
 
-/* ---------- 窄屏 ---------- */
+/* ---------- 窄屏：知识库变成抽屉 ---------- */
+
+@media (max-width: 900px) {
+    .sidebar {
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 40;
+        transform: translateX(-100%);
+        transition: transform .22s ease;
+        box-shadow: var(--shadow-md);
+    }
+
+    .app.narrow-open .sidebar {
+        transform: none;
+    }
+
+    .only-narrow {
+        display: grid;
+    }
+}
 
 @media (max-width: 640px) {
     .app {
@@ -584,7 +1221,13 @@ body {
         display: none;
     }
 
-    .bubble {
+    .bubble,
+    .ctx {
         max-width: 92%;
+        width: auto;
+    }
+
+    .chip {
+        display: none;
     }
 }

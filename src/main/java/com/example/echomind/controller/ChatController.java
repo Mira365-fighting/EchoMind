@@ -2,6 +2,8 @@ package com.example.echomind.controller;
 
 import com.example.echomind.dto.ChatMessageVO;
 import com.example.echomind.memory.RedisChatMemoryStore;
+import com.example.echomind.rag.RetrievalService;
+import com.example.echomind.rag.RetrievedChunk;
 import com.example.echomind.service.ChatAssistant;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,7 +27,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 聊天接口。v1.0 只有三个端点：
+ * 聊天接口。
  * <ul>
  *     <li>{@code GET /api/chat/stream}                —— SSE 流式对话（核心）</li>
  *     <li>{@code GET /api/chat/memory/{memoryId}}     —— 读取会话历史（刷新页面后回填）</li>
@@ -35,10 +37,15 @@ import java.util.UUID;
  * <p><b>SSE 事件约定</b>（前端用 addEventListener 分别监听）：
  * <pre>
  *   event: session  data: "会话id"        —— 第一帧，把 memoryId 告诉前端
+ *   event: context  data: [ {...}, ... ]  —— v2.0 新增：检索命中的片段（TopK 结果，含相似度与出处）
  *   event: message  data: "一个token"     —— N 帧，模型吐出的增量文本
  *   event: done     data: "[DONE]"        —— 最后一帧，模型说完了
  *   event: error    data: "错误信息"       —— 出错帧，通常跟着连接关闭
  * </pre>
+ *
+ * <p>所有 {@code data} 一律是合法 JSON：字符串是带引号的 JSON 字符串，数组是 JSON 数组，
+ * 前端统一 {@code JSON.parse} 即可。这样做的原因是 SSE 的 data 字段按行解析，
+ * 而 Markdown token 里全是换行，不转义会直接把报文结构打乱。
  */
 @Slf4j
 @RestController
@@ -61,16 +68,23 @@ public class ChatController {
 
     private final ChatAssistant chatAssistant;
     private final RedisChatMemoryStore chatMemoryStore;
+    private final RetrievalService retrievalService;
 
     /**
      * 流式对话：前端用 EventSource 连这个接口。
      *
+     * <p>v2.0 的流程：<b>先检索，再回答</b>。
+     * 检索这一步在调用大模型<b>之前</b>完成，所以命中结果能立刻作为 {@code context} 事件推给前端，
+     * 用户能一边看模型吐字，一边核对"它到底参考了哪几段"。
+     *
      * @param message  用户输入
      * @param memoryId 会话 id；不传就新建一个会话，传了就在原会话上继续（多轮记忆靠它）
+     * @param rag      是否启用知识库检索，默认 true；前端可以关掉做 A/B 对比
      */
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@RequestParam String message,
-                            @RequestParam(required = false) String memoryId) {
+                            @RequestParam(required = false) String memoryId,
+                            @RequestParam(required = false, defaultValue = "true") boolean rag) {
 
         String sessionId = normalizeMemoryId(memoryId);
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
@@ -83,10 +97,20 @@ public class ChatController {
         send(emitter, "session", sessionId);
 
         try {
-            // 1) 拿到 TokenStream（此时请求还没发出去）
-            TokenStream tokenStream = chatAssistant.chat(sessionId, message);
+            // 1) 检索 TopK（未启用 / 库是空的 / 检索出错，都会返回空列表，退化成普通对话）
+            List<RetrievedChunk> chunks = rag ? retrievalService.retrieve(message) : List.of();
+            if (rag) {
+                // 无论有没有命中都推一帧，前端才能区分"没开 RAG"和"没搜到相关内容"
+                sendJson(emitter, "context", chunks);
+            }
 
-            // 2) 注册三种回调
+            // 2) 命中资料走 RAG 提示词，没命中走普通提示词
+            TokenStream tokenStream = chunks.isEmpty()
+                    ? chatAssistant.chat(sessionId, message)
+                    : chatAssistant.chatWithContext(sessionId,
+                            retrievalService.buildContextBlock(chunks), message);
+
+            // 3) 注册三种回调
             tokenStream
                     .onPartialResponse(token -> send(emitter, "message", token))
                     .onCompleteResponse(response -> {
@@ -99,7 +123,7 @@ public class ChatController {
                         emitter.complete();
                     });
 
-            // 3) 真正发起请求（必须放在最后）
+            // 4) 真正发起请求（必须放在最后）
             tokenStream.start();
 
         } catch (Exception e) {
@@ -131,7 +155,7 @@ public class ChatController {
     // ==================== 私有工具方法 ====================
 
     /**
-     * 发送一帧 SSE。
+     * 发送一帧 SSE（载荷是字符串）。
      *
      * <p><b>为什么要把数据再 JSON 转义一遍？</b>
      * SSE 的 {@code data:} 字段是「按行」解析的，载荷里一旦出现裸换行就会破坏报文结构。
@@ -139,20 +163,24 @@ public class ChatController {
      * 所以这里统一用 JSON 字符串包一层，换行变成字面量 {@code \n}，前端 {@code JSON.parse} 再还原。
      */
     private void send(SseEmitter emitter, String event, String payload) {
+        sendJson(emitter, event, payload);
+    }
+
+    /**
+     * 发送一帧 SSE（载荷是任意对象，会被序列化成 JSON）。
+     * 检索结果数组就走这里 —— 和上面的字符串是同一种约定，前端一律 {@code JSON.parse}。
+     */
+    private void sendJson(SseEmitter emitter, String event, Object payload) {
         try {
-            emitter.send(SseEmitter.event().name(event).data(toJsonString(payload), MediaType.TEXT_PLAIN));
+            String data = JSON.writeValueAsString(payload);
+            emitter.send(SseEmitter.event().name(event).data(data, MediaType.TEXT_PLAIN));
+        } catch (JsonProcessingException e) {
+            // JsonProcessingException 是 IOException 的子类，必须放在前面才能捕获到。
+            // 载荷都是简单 record / String，理论上不会走到这里。
+            log.warn("SSE 载荷序列化失败：{}", e.getMessage());
         } catch (IOException | IllegalStateException e) {
             // 用户点了"停止"或直接关页面时会走到这里，属于正常情况
             log.debug("SSE 发送失败（客户端可能已断开）：{}", e.getMessage());
-        }
-    }
-
-    private static String toJsonString(String raw) {
-        try {
-            return JSON.writeValueAsString(raw);
-        } catch (JsonProcessingException e) {
-            // 基本不可能发生（String 一定能序列化），兜底返回原串
-            return "\"\"";
         }
     }
 

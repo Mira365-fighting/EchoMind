@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>EchoMind · v1.0 流式对话</title>
+    <title>EchoMind · v2.0 RAG 检索增强</title>
     <!-- 代码高亮主题（本地文件，不依赖 CDN） -->
     <link rel="stylesheet" href="vendor/highlight-github.min.css">
     <link rel="stylesheet" href="css/style.css">
@@ -11,38 +11,117 @@
 <body>
 <div class="app">
 
-    <header class="topbar">
-        <div class="brand">
-            <span class="logo">◉</span>
-            <div class="brand-text">
-                <h1>EchoMind</h1>
-                <p>v1.0 · LangChain4j 流式对话 + Redis 多轮记忆</p>
+    <!-- ==================== 左侧：知识库 ==================== -->
+    <aside class="sidebar" id="sidebar">
+        <div class="side-head">
+            <h2>知识库</h2>
+            <button class="icon-btn" id="sideToggle" type="button" title="收起 / 展开">«</button>
+        </div>
+
+        <div class="side-body">
+
+            <!-- RAG 开关 -->
+            <label class="switch-row" for="ragToggle">
+                <span class="switch-text">
+                    <strong>启用检索增强</strong>
+                    <em>关闭后就是 v1.0 的纯对话</em>
+                </span>
+                <input type="checkbox" id="ragToggle" checked>
+                <span class="switch-track"><i></i></span>
+            </label>
+
+            <!-- 向量库状态 -->
+            <div class="panel">
+                <div class="panel-title">向量库状态</div>
+                <div class="kv" id="ragStatus">
+                    <div class="kv-row"><span>状态</span><b class="dim">读取中…</b></div>
+                </div>
             </div>
-        </div>
-        <div class="actions">
-            <span class="chip" id="sessionChip" title="当前会话 ID">新会话</span>
-            <button class="ghost-btn" id="newChatBtn" type="button">新对话</button>
-        </div>
-    </header>
 
-    <main class="messages" id="messageList">
-        <div class="empty" id="emptyState">
-            <div class="empty-icon">◉</div>
-            <h2>开始一次对话</h2>
-            <p>回答通过 SSE 流式返回，这里会实时渲染 Markdown。</p>
-            <div class="samples">
-                <button class="sample" type="button">用 Java 写一个快速排序，并解释时间复杂度</button>
-                <button class="sample" type="button">用表格对比 SSE 和 WebSocket 的区别</button>
-                <button class="sample" type="button">你还记得我上一句话说了什么吗？</button>
+            <!-- 上传 -->
+            <div class="panel">
+                <div class="panel-title">
+                    上传文档
+                    <span class="hint">PDF / MD / TXT</span>
+                </div>
+                <div class="dropzone" id="dropzone">
+                    <input type="file" id="fileInput" multiple accept=".pdf,.md,.markdown,.txt,.text,.log,.csv,.json,.yml,.yaml" hidden>
+                    <div class="dz-icon">⬆</div>
+                    <div class="dz-main">点击选择，或把文件拖到这里</div>
+                    <div class="dz-sub" id="dzSub">解析 → 切片 → 向量化 → 写入向量库</div>
+                </div>
+                <div class="upload-log" id="uploadLog"></div>
             </div>
+
+            <!-- 文档列表 -->
+            <div class="panel">
+                <div class="panel-title">
+                    已入库文档
+                    <button class="link-btn" id="clearAllBtn" type="button">清空</button>
+                </div>
+                <div class="doc-list" id="docList">
+                    <div class="doc-empty">还没有文档</div>
+                </div>
+            </div>
+
+            <!-- 检索自测 -->
+            <details class="panel collapsible">
+                <summary class="panel-title">
+                    检索自测
+                    <span class="hint">只看检索，不调大模型</span>
+                </summary>
+                <div class="search-row">
+                    <input type="text" id="searchInput" placeholder="输入一句话，看能搜到什么">
+                    <button class="mini-btn" id="searchBtn" type="button">检索</button>
+                </div>
+                <div class="search-result" id="searchResult"></div>
+            </details>
+
+            <div class="side-foot">
+                维度必须一致：当前向量维度 <b id="footDim">-</b><br>
+                <span class="dim">换 Embedding 模型后，Milvus 里的 collection 要删掉重建</span>
+            </div>
+
         </div>
-    </main>
+    </aside>
 
-    <footer class="composer">
-        <textarea id="input" rows="1" placeholder="输入问题，Enter 发送，Shift + Enter 换行"></textarea>
-        <button class="send-btn" id="sendBtn" type="button">发送</button>
-    </footer>
+    <!-- ==================== 右侧：对话 ==================== -->
+    <div class="main">
 
+        <header class="topbar">
+            <button class="icon-btn only-narrow" id="sideOpen" type="button" title="打开知识库">»</button>
+            <div class="brand">
+                <span class="logo">◉</span>
+                <div class="brand-text">
+                    <h1>EchoMind</h1>
+                    <p>v2.0 · RAG 检索增强（BGE 向量化 + Milvus TopK 检索）</p>
+                </div>
+            </div>
+            <div class="actions">
+                <span class="chip" id="sessionChip" title="当前会话 ID">新会话</span>
+                <button class="ghost-btn" id="newChatBtn" type="button">新对话</button>
+            </div>
+        </header>
+
+        <main class="messages" id="messageList">
+            <div class="empty" id="emptyState">
+                <div class="empty-icon">◉</div>
+                <h2>先上传文档，再提问</h2>
+                <p>回答会严格基于文档内容，并在下方列出实际检索到的段落，便于核对是否在"照稿说话"。</p>
+                <div class="samples">
+                    <button class="sample" type="button">这份文档主要讲了什么？</button>
+                    <button class="sample" type="button">把文档里的关键结论整理成一个表格</button>
+                    <button class="sample" type="button">文档里有没有提到一个不存在的东西？</button>
+                </div>
+            </div>
+        </main>
+
+        <footer class="composer">
+            <textarea id="input" rows="1" placeholder="输入问题，Enter 发送，Shift + Enter 换行"></textarea>
+            <button class="send-btn" id="sendBtn" type="button">发送</button>
+        </footer>
+
+    </div>
 </div>
 
 <div class="toast" id="toast"></div>
